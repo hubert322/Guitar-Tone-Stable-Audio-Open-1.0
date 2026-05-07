@@ -1,0 +1,16 @@
+{
+    "dataset_type": "audio_dir",
+    "datasets": [
+        {
+            "id": "guitars_monophonic",
+            "path": "/scratch/th3622/IDMT-SMT-AUDIO-EFFECTS/Gitarre monophon/Samples/NoFX",
+            "custom_metadata_module": "metadata_utils.py"
+        },
+        {
+            "id": "guitars_polyphonic",
+            "path": "/scratch/th3622/IDMT-SMT-AUDIO-EFFECTS/Gitarre polyphon/Samples/NoFX",
+            "custom_metadata_module": "metadata_utils.py"
+        }
+    ],
+    "random_crop": false
+}
