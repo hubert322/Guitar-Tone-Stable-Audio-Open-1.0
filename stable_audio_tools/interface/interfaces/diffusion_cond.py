@@ -7,7 +7,7 @@ import subprocess
 import torch
 import torchaudio
 import threading 
-import os, time, math
+import os, time, math, shutil
 
 from einops import rearrange
 from torchaudio import transforms as T
@@ -24,8 +24,8 @@ diffusion_objective = None
 
 # when using a prompt in a filename
 def condense_prompt(prompt):
-    pattern = r'[\\/:*?"<>|]'
-    # Replace special characters with hyphens
+    pattern = r'[\\/:*?"<>| ]'
+    # Replace special characters and spaces with hyphens
     prompt = re.sub(pattern, '-', prompt)
     # set a character limit 
     prompt = prompt[:150]
@@ -58,7 +58,7 @@ def generate_cond(
         mask_maskstart=None,
         mask_maskend=None,
         inpaint_audio=None,
-        batch_size=1    
+        batch_size=1, delete_delay=30
     ):
 
     if torch.cuda.is_available():
@@ -283,10 +283,114 @@ def generate_cond(
     audio_spectrogram = audio_spectrogram_image(audio, sample_rate=sample_rate)
 
     # Asynchronously delete the files after returning the output file, so as to prevent clutter in the directory
-    if file_naming in ["verbose", "prompt"]:
-        delete_files_async([output_wav, output_filename], 30)
+    if file_naming in ["verbose", "prompt"] and delete_delay > 0:
+        delete_files_async([output_wav, output_filename], delete_delay)
 
     return (output_filename, [audio_spectrogram, *preview_images])
+
+def add_to_collection(file_path):
+    if file_path is None:
+        return get_collection_files()
+        
+    # Check if file_path is a list or tuple (Gradio sometimes sends it as such)
+    if isinstance(file_path, (list, tuple)):
+        if len(file_path) > 0:
+            # If it's a Gradio audio tuple (sample_rate, numpy_array), we can't easily use it as a file path
+            if isinstance(file_path[0], int):
+                print(f"Received audio data instead of file path. Ensure Audio component is set to type='filepath'.")
+                return get_collection_files()
+            file_path = file_path[0]
+        else:
+            return get_collection_files()
+
+    if not isinstance(file_path, str) or not os.path.exists(file_path):
+        print(f"File not found or invalid path: {file_path}")
+        return get_collection_files()
+    
+    os.makedirs("collections", exist_ok=True)
+    
+    # Create unique name to avoid overwriting
+    base = os.path.basename(file_path)
+    timestamp = int(time.time())
+    new_name = f"saved_{timestamp}_{base}"
+    dest = os.path.join("collections", new_name)
+    
+    shutil.copy(file_path, dest)
+    print(f"Saved to collection: {dest}")
+    return get_collection_files()
+
+def get_collection_files():
+    if not os.path.exists("collections"):
+        return []
+    files = [os.path.join("collections", f) for f in os.listdir("collections") if os.path.isfile(os.path.join("collections", f))]
+    # Sort by creation time
+    files.sort(key=os.path.getctime, reverse=True)
+    return files
+
+def clear_collection():
+    if os.path.exists("collections"):
+        for f in os.listdir("collections"):
+            os.remove(os.path.join("collections", f))
+    return []
+
+def generate_pair(
+        prompt_a,
+        prompt_b,
+        negative_prompt=None,
+        seconds_start=0,
+        seconds_total=30,
+        cfg_scale=6.0,
+        steps=250,
+        preview_every=None,
+        seed=-1,
+        sampler_type="dpmpp-3m-sde",
+        sigma_min=0.03,
+        sigma_max=1000,
+        rho=1.0,
+        cfg_interval_min=0.0,
+        cfg_interval_max=1.0,
+        cfg_rescale=0.0,
+        file_format="wav",
+        file_naming="verbose",
+        cut_to_seconds_total=False,
+        init_audio=None,
+        init_noise_level=1.0,
+        mask_maskstart=None,
+        mask_maskend=None,
+        inpaint_audio=None,
+        batch_size=1, delete_delay=30
+    ):
+    
+    seed = int(seed)
+    if seed == -1:
+        seed = np.random.randint(0, 2**32 - 1, dtype=np.uint32)
+    
+    print(f"Generating pair with seed: {seed}")
+    print(f"DEBUG: prompt_a={prompt_a}")
+    print(f"DEBUG: prompt_b={prompt_b}")
+    
+    # Use a longer delay for deletion to ensure user can "Save" them
+    # Actually, let's just use verbose naming which includes the seed
+    
+    res_a = generate_cond(
+        prompt_a, negative_prompt, seconds_start, seconds_total, cfg_scale, steps, 
+        preview_every, seed, sampler_type, sigma_min, sigma_max, rho, 
+        cfg_interval_min, cfg_interval_max, cfg_rescale, file_format, 
+        "verbose", cut_to_seconds_total, init_audio, init_noise_level, 
+        mask_maskstart, mask_maskend, inpaint_audio, batch_size,
+        delete_delay=600 # Keep for 10 minutes
+    )
+    
+    res_b = generate_cond(
+        prompt_b, negative_prompt, seconds_start, seconds_total, cfg_scale, steps, 
+        preview_every, seed, sampler_type, sigma_min, sigma_max, rho, 
+        cfg_interval_min, cfg_interval_max, cfg_rescale, file_format, 
+        "verbose", cut_to_seconds_total, init_audio, init_noise_level, 
+        mask_maskstart, mask_maskend, inpaint_audio, batch_size,
+        delete_delay=600 # Keep for 10 minutes
+    )
+    
+    return res_a[0], res_a[1][0], res_b[0], res_b[1][0], seed
 
 #  Asynchronously delete the given list of filenames after delay seconds. Sets up thread that sleeps for delay then deletes. 
 def delete_files_async(filenames, delay):
@@ -388,14 +492,14 @@ def create_sampling_ui(model_config):
 
             # Default generation tab
             with gr.Accordion("Init audio", open=False):
-                init_audio_input = gr.Audio(label="Init audio", waveform_options=gr.WaveformOptions(show_recording_waveform=False))
+                init_audio_input = gr.Audio(label="Init audio")
                 min_noise_level = 0.01 if (is_rf or is_rf_denoiser) else 0.1
                 max_noise_level = 1.0 if (is_rf or is_rf_denoiser) else 100.0
 
                 init_noise_level_slider = gr.Slider(minimum=min_noise_level, maximum=max_noise_level, step=0.01, value=0.1, label="Init noise level")
 
             with gr.Accordion("Inpainting", open=False, visible=has_inpainting):
-                inpaint_audio_input = gr.Audio(label="Inpaint audio", waveform_options=gr.WaveformOptions(show_recording_waveform=False))
+                inpaint_audio_input = gr.Audio(label="Inpaint audio")
                 mask_maskstart_slider = gr.Slider(minimum=0.0, maximum=sample_size//sample_rate, step=0.1, value=10, label="Mask Start (sec)")
                 mask_maskend_slider = gr.Slider(minimum=0.0, maximum=sample_size//sample_rate, step=0.1, value=sample_size//sample_rate, label="Mask End (sec)")
 
@@ -426,8 +530,7 @@ def create_sampling_ui(model_config):
             ]
 
         with gr.Column():
-            audio_output = gr.Audio(label="Output audio", interactive=False, 
-                    waveform_options=gr.WaveformOptions(show_recording_waveform=False))
+            audio_output = gr.Audio(label="Output audio", interactive=False, elem_id="output-audio", type="filepath")
             audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
             send_to_init_button = gr.Button("Send to init audio", scale=1)
             send_to_init_button.click(fn=lambda audio: audio, inputs=[audio_output], outputs=[init_audio_input])
@@ -454,60 +557,72 @@ def create_diffusion_cond_ui(model_config, in_model, in_model_half=True, gradio_
 
     model_half = in_model_half
 
-    js ="""function run_javascript_on_page_load(){
+    js ="""
+    () => {
         const generateBtn = Array.from(document.querySelectorAll('button'))
             .find(btn => btn.innerText.trim() === 'Generate');
+            
         function getAudioOutputPlayer () {
-            return [...document.querySelectorAll('label')].find(label => label.textContent.trim() === 'Output audio')?.parentElement.querySelector('audio');
+            return document.querySelector('#output-audio audio');
         }
+        
         const infiniteRadio = document.querySelector('#infinite-radio input[type="checkbox"]');
         const autoplay = document.querySelector('#autoplay input[type="checkbox"]');
         const automaticDownload = document.querySelector('#automatic-download input[type="checkbox"]');
+        
         let radioAutoStart = false;
         let listenersSetup = false;
+        
         const setupListeners = () => {
             const audioEl = getAudioOutputPlayer();
-            if (!audioEl) return;
+            if (!audioEl || listenersSetup) return;
+            
             audioEl.addEventListener('loadedmetadata', () => {
-                if(automaticDownload.checked){
+                if(automaticDownload && automaticDownload.checked){
                     downloadAudio(audioEl);
                 }
-                if(autoplay.checked || radioAutoStart){
-                    audioEl.play();
+                if((autoplay && autoplay.checked) || radioAutoStart){
+                    audioEl.play().catch(e => console.debug("Autoplay blocked:", e));
                     radioAutoStart = false;
                 }
-                if(infiniteRadio.checked){
-                    audioEl.addEventListener('timeupdate', function checkAudioEnd() {
+                if(infiniteRadio && infiniteRadio.checked){
+                    const checkAudioEnd = () => {
                         if (audioEl.duration - audioEl.currentTime <= 1) {                            
                             generateBtn.click();
                             radioAutoStart = true;
                             audioEl.removeEventListener('timeupdate', checkAudioEnd);
                         }
-                    });
+                    };
+                    audioEl.addEventListener('timeupdate', checkAudioEnd);
                 }
             });
             listenersSetup = true;
         };
-        generateBtn.addEventListener('click', () => {
-            if(listenersSetup) return;
-            const interval = setInterval(() => {
-                console.log("...")
-                const audioEl = document.querySelector('audio');
-                if (audioEl?.src && audioEl.src !== window.location.href) {
-                    setupListeners();
-                    clearInterval(interval);
-                }
-            }, 100);
-        });
+        
+        if (generateBtn) {
+            generateBtn.addEventListener('click', () => {
+                if(listenersSetup) return;
+                const interval = setInterval(() => {
+                    const audioEl = getAudioOutputPlayer();
+                    if (audioEl && audioEl.src && audioEl.src !== window.location.href) {
+                        setupListeners();
+                        clearInterval(interval);
+                    }
+                }, 100);
+            });
+        }
+        
         // Respond to >> button on MacBookPro and on steering wheel during CarPlay
         if ('mediaSession' in navigator) {
-            navigator.mediaSession.setActionHandler('nexttrack', () => generateBtn.click());
+            navigator.mediaSession.setActionHandler('nexttrack', () => generateBtn && generateBtn.click());
             navigator.mediaSession.setActionHandler('play', () => getAudioOutputPlayer()?.play());
             navigator.mediaSession.setActionHandler('pause', () => getAudioOutputPlayer()?.pause());
         }
+        
         // Automatic Download
         function downloadAudio(audioEl) {
             const audioSrc = audioEl.src;
+            if (!audioSrc) return;
             const link = document.createElement('a');
             link.href = audioSrc;
             link.download = audioSrc.substring(audioSrc.lastIndexOf('/') + 1);
@@ -521,8 +636,63 @@ def create_diffusion_cond_ui(model_config, in_model, in_model_half=True, gradio_
     with gr.Blocks(js=js, theme=gr.themes.Base()) as ui:
         if gradio_title:
             gr.Markdown("### %s" % gradio_title)
+        
         with gr.Tab("Generation"):
             create_sampling_ui(model_config) 
+        
+        with gr.Tab("Dual Gen & Collection"):
+            with gr.Row():
+                with gr.Column(scale=6):
+                    dual_prompt_a = gr.Textbox(label="Prompt A (e.g. Neck Pickup)", placeholder="electric guitar neck pickup")
+                    dual_prompt_b = gr.Textbox(label="Prompt B (e.g. Bridge Pickup)", placeholder="electric guitar bridge pickup")
+                    dual_negative_prompt = gr.Textbox(label="Negative Prompt", placeholder="")
+                dual_generate_button = gr.Button("Generate Pair", variant='primary', scale=1)
 
-        # JavaScript to autoplay audio immediately after generation (if autoplay enabled)
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### Result A")
+                    dual_audio_a = gr.Audio(label="Audio A", interactive=False, type="filepath")
+                    dual_spec_a = gr.Image(label="Spectrogram A", interactive=False)
+                    save_a_button = gr.Button("Add A to Collection")
+
+                with gr.Column():
+                    gr.Markdown("### Result B")
+                    dual_audio_b = gr.Audio(label="Audio B", interactive=False, type="filepath")
+                    dual_spec_b = gr.Image(label="Spectrogram B", interactive=False)
+                    save_b_button = gr.Button("Add B to Collection")
+
+            with gr.Accordion("Shared Parameters", open=False):
+                with gr.Row():
+                    dual_steps = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps")
+                    dual_cfg = gr.Slider(minimum=0.0, maximum=25.0, step=0.1, value=7.0, label="CFG scale")
+                    dual_seed = gr.Textbox(label="Seed (-1 for random)", value="-1")
+                
+                with gr.Row():
+                    dual_seconds_total = gr.Slider(minimum=0, maximum=512, step=1, value=30, label="Seconds total")
+                    dual_sampler = gr.Dropdown(["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms", "k-dpmpp-2s-ancestral"], label="Sampler type", value="dpmpp-3m-sde")
+
+            gr.Markdown("---")
+            gr.Markdown("## Audio Collection")
+            collection_files = gr.File(label="Saved Generations", value=get_collection_files, file_count="multiple", interactive=False)
+            with gr.Row():
+                refresh_collection_button = gr.Button("Refresh Collection")
+                clear_collection_button = gr.Button("Clear Collection", variant="stop")
+
+            # Dual generation click
+            dual_generate_button.click(
+                fn=generate_pair,
+                inputs=[
+                    dual_prompt_a, dual_prompt_b, dual_negative_prompt,
+                    gr.State(0), dual_seconds_total, dual_cfg, dual_steps,
+                    gr.State(None), dual_seed, dual_sampler
+                ],
+                outputs=[dual_audio_a, dual_spec_a, dual_audio_b, dual_spec_b, dual_seed]
+            )
+
+            # Collection actions
+            save_a_button.click(fn=add_to_collection, inputs=[dual_audio_a], outputs=[collection_files])
+            save_b_button.click(fn=add_to_collection, inputs=[dual_audio_b], outputs=[collection_files])
+            refresh_collection_button.click(fn=get_collection_files, outputs=[collection_files])
+            clear_collection_button.click(fn=clear_collection, outputs=[collection_files])
+
     return ui
