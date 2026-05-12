@@ -1,5 +1,32 @@
-# stable-audio-tools
-Training and inference code for audio generation models
+# Guitar Tone Stable Audio Open 1.0
+
+This project focuses on the fine-tuning of [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) to achieve precise control over guitar timbre through technical descriptors.
+
+## 🎯 The Goal
+The primary objective of this project is to map specific technical descriptors, such as **"neck pickup"** or **"bridge pickup"**, to authentic changes in audio timbre. By fine-tuning on specialized datasets, the model learns to maintain pitch consistency while accurately shifting the tonal characteristics. This allows for generating audio where prompts like "electric guitar neck pickup" yield a warm, full-bodied timbre, while "electric guitar bridge pickup" produces a brighter, sharper sound.
+
+## 🎸 Showcase & Achievements
+
+### Generated Audio Demo
+Check out the results of our model in action:
+
+<video src="assets/Screen%20Recording%202026-05-12%20at%2000.39.34.mov" controls width="100%"></video>
+
+### 📈 Training Results
+We tracked our training progress and performance metrics using Weights & Biases. You can view the detailed logs and results here:
+[**View WandB Training Run**](https://wandb.ai/hubert322-hubert-hung/guitar-train-clean/runs/eqxsyz74?nw=nwuserhubert322)
+
+### 🚀 Model Weights
+The fine-tuned model weights (step 13500) are available as a versioned artifact on Weights & Biases:
+[**Download Model Weights (v0)**](https://wandb.ai/hubert322-hubert-hung/guitar-train-clean/artifacts/model/guitar-model-step-13500/v0)
+
+### 📚 Technical Details
+- **Dataset**: I used the [IDMT-Audio-Effects](https://www.idmt.fraunhofer.de/en/publications/datasets/audio_effects.html) dataset for training, which provides a rich collection of guitar recordings with various effects and pickup configurations.
+- **Base Model**: This project is a fine-tuned version of [Stability AI's Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0), a state-of-the-art open-weights model for audio generation.
+- **Foundation**: This repository is a fork of the original [stable-audio-tools](https://github.com/Stability-AI/stable-audio-tools), enhanced and specialized for high-fidelity guitar tone synthesis.
+
+---
+
 
 # Install
 
