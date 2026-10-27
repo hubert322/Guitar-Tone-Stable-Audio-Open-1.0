@@ -9,7 +9,7 @@ The primary objective of this project is to map specific technical descriptors, 
 
 ### Generated Audio Demo
 Check out the results of our model in action:
-<video src="https://github.com/user-attachments/assets/1a83f60e-9fe5-491a-8b5a-32f54a8faefe" controls width="100%">/video>
+<video src="https://github.com/user-attachments/assets/75c2e987-e81c-49d0-93dc-70d1f6c82099" controls width="100%"></video>
 
 ### 📈 Training Results
 We tracked our training progress and performance metrics using Weights & Biases. You can view the detailed logs and results here:
